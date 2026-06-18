@@ -214,6 +214,23 @@ get_project_name(){
   echo "$name"
 }
 
+test_mode(){
+  echo "Проверка доступности репозиториев"
+  echo "================================="
+  local ok=0 fail=0
+  for url in "${REPO_URLS[@]}"; do
+    if git ls-remote --heads "$url" &> /dev/null; then
+      echo "$url - доступен"
+      ((ok++))
+    else
+      echo "$url - недоступен"
+      ((fail++))
+    fi
+  done
+  echo "Итого: доступно $ok, недоступно $fail"
+  exit 0
+}
+
 main(){
   parse_args $@
 
@@ -245,6 +262,8 @@ main(){
     for url in "${REPO_URLS[@]}"; do
       echo " $url"
     done
+
+    test_mode
   fi
 
 }
