@@ -211,6 +211,7 @@ transform_url(){
 get_project_name(){
   local url="$1"
   local name="${url##*/}"
+  name="${name%.git}"
   echo "$name"
 }
 
@@ -229,6 +230,38 @@ test_mode(){
   done
   echo "Итого: доступно $ok, недоступно $fail"
   exit 0
+}
+
+retry() {
+  local n=0
+  until [[ $n -ge $RETRY_COUNT ]]; do
+    "$@" && return 0
+    ((n++))
+    local delay=$((2 ** n))
+    log_warn "Попытка $n/$RETRY_COUNT через ${delay}с"
+    sleep "$delay"
+  done
+  log_error "Не удалось после $RETRY_COUNT попыток: $*"
+  return 1
+}
+
+clone_project() {
+  local url="$1"
+  local project_name=$(get_project_name "$url")
+  local date_dir=$(date "+%d-%m-%Y")
+  local target_dir="$BACKUP_DIR/$project_name/$date_dir/$project_name"
+
+  if [[ -d "$target_dir" ]]; then
+    log_info "Обновление существующего зеркала: $project_name"
+    retry git -C "$target_dir" remote update --prune
+    log_info "Обновлено: $project_name"
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$target_dir")"
+  log_info "Клонирование $project_name -> $target_dir"
+  retry git clone --mirror "$url" "$target_dir"
+  log_info "Выполнено: $project_name"
 }
 
 main(){
@@ -266,6 +299,9 @@ main(){
     test_mode
   fi
 
+  for (( i=0; i<${#REPO_URLS[@]}; i++ )); do
+    clone_project "${REPO_URLS[i]}"
+  done
 }
 
 main $@
