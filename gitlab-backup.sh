@@ -84,8 +84,81 @@ parse_args(){
   done
 }
 
+find_config(){
+  local paths=(
+    "$ARG_CONFIG"
+    "$HOME/.config/gitlab-backup.conf"
+    "/etc/gitlab-backup.conf"
+  )
+
+  for path in "${paths[@]}"; do
+    if [[ -n "$path" && -r "$path" ]]; then
+      echo "$path"
+      return 0
+    fi
+  done
+
+  if [[ -n "$ARG_CONFIG" ]]; then
+    log_error "Указанный конфигурационный файл не найден: $ARG_CONFIG"
+  else
+    log_error "Конфигурационный файл не найден. Запустите скрипт с флагом --help, чтобы получить шаблон конфигурационного файла."
+  fi
+
+  exit 1
+}
+
+load_config(){
+  if ! source "$1"; then
+    log_error "Ошибка при загрузке конфигурационного файла: $1"
+    exit 1
+  fi
+
+  log_info "Конфигурация загружена из: $1"
+}
+
+validate_config(){
+  for var in GITLAB_USER GITLAB_TOKEN BACKUP_DIR; do
+    if [[ -z "${!var}" ]]; then
+      log_error "Пропущен необходимый параметр: $var"
+      exit 1
+    fi
+  done
+
+  if [[ -z "$REPOS" && -z "$REPO_FILE" ]]; then
+    log_error "Не указаны репозитории. Укажите REPOS или REPO_FILE в конфигурационном файле." 
+    exit 1
+  fi
+
+  if [[ -n "$REPO_FILE" && ! -r "$REPO_FILE" ]]; then
+    log_error "Файл с репозиториями не найден или недоступен для чтения: $REPO_FILE"
+    exit 1
+  fi
+
+  if ! mkdir -p "$BACKUP_DIR"; then
+    log_error "Не удалось создать директорию для бэкапов: $BACKUP_DIR"
+    exit 1
+  fi
+
+  PARALLEL_JOBS="${PARALLEL_JOBS:-4}"
+  RETRY_COUNT="${RETRY_COUNT:-3}"
+  LOG_FILE="${LOG_FILE:-./logs/gitlab-backup.log}"
+
+  for config_arg in PARALLEL_JOBS RETRY_COUNT; do
+    if ! [[ "${!config_arg}" =~ ^[1-9][0-9]*$ ]]; then
+      log_error "$config_arg должно быть положительным числом: ${!config_arg}"
+      exit 1
+    fi
+  done
+
+  log_info "Конфигурация проверена успешно"
+}
+
 main(){
   parse_args $@
+
+  config_path=$(find_config)
+  load_config "$config_path"
+  validate_config
 
   mkdir -p "$(dirname "$LOG_FILE")"
   exec > >(tee -a "$LOG_FILE") 2>&1
