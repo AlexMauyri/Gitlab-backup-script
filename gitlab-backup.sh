@@ -153,6 +153,24 @@ validate_config(){
   log_info "Конфигурация проверена успешно"
 }
 
+read_repos_from_var(){
+  if [[ -z "$REPOS" ]]; then
+    return 0
+  fi
+
+  log_info "Чтение репозиториев из переменной REPOS: ${REPOS}"
+
+  IFS='|' read -ra urls <<< "$REPOS"
+  for url in "${urls[@]}"; do
+    url="${url// /}"
+    if [[ -n "$url" ]]; then
+      RAW_URLS+=("$url")
+    fi
+  done
+
+  log_info "Успешно получены репозитории: ${RAW_URLS[@]}"
+}
+
 main(){
   parse_args $@
 
@@ -162,7 +180,8 @@ main(){
 
   mkdir -p "$(dirname "$LOG_FILE")"
   exec > >(tee -a "$LOG_FILE") 2>&1
-
+  
+  read_repos_from_var
 }
 
 main $@
