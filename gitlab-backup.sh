@@ -202,6 +202,18 @@ filter_duplicate_urls(){
   log_info "Получены уникальные репозитории: ${REPO_URLS[@]}"
 }
 
+transform_url(){
+  local url="$1"
+  local auth_url="${url/https:\/\//https://oauth2:${GITLAB_TOKEN}@}"
+  echo "$auth_url"
+}
+
+get_project_name(){
+  local url="$1"
+  local name="${url##*/}"
+  echo "$name"
+}
+
 main(){
   parse_args $@
 
@@ -223,6 +235,18 @@ main(){
       echo " $url"
     done
   fi
+
+  for (( i=0; i<${#REPO_URLS[@]}; i++ )); do
+    REPO_URLS[i]="$(transform_url "${REPO_URLS[i]}")"
+  done
+
+  if [[ "$ARG_TEST" == true ]]; then
+    log_info "Список уникальных репозиториев (с аутентификацией):"
+    for url in "${REPO_URLS[@]}"; do
+      echo " $url"
+    done
+  fi
+
 }
 
 main $@
