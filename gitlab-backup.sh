@@ -10,13 +10,17 @@ REPOS=""
 REPO_FILE=""
 PARALLEL_JOBS=4
 RETRY_COUNT=3
-LOG_FILE="/var/log/gitlab-backup.log"
+LOG_FILE="./logs/gitlab-backup.log"
 TELEGRAM_BOT_TOKEN=""
 TELEGRAN_CHAT_ID=""
 
 #ARG VARIABLES
 ARG_CONFIG=""
 ARG_TEST=false
+
+log_info() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] $*"; }
+log_warn() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [WARN] $*"; }
+log_error() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $*" >&2; }
 
 help(){
   cat << EOF
@@ -60,8 +64,8 @@ BACKUP_DIR=/backup/gitlab
 # Опционально: количество повторных попыток при сетевых ошибках (по умолчанию: 3)
 # RETRY_COUNT=3
 
-# Опционально: путь к файлу логов (по умолчанию: /var/log/gitlab-backup.log)
-# LOG_FILE=/var/log/gitlab-backup.log
+# Опционально: путь к файлу логов (по умолчанию: ./logs/gitlab-backup.log)
+# LOG_FILE=./logs/gitlab-backup.log
 
 # Опционально: уведомления в Telegram
 # TELEGRAM_BOT_TOKEN=123456:ABC-DEF1234
@@ -82,6 +86,10 @@ parse_args(){
 
 main(){
   parse_args $@
+
+  mkdir -p "$(dirname "$LOG_FILE")"
+  exec > >(tee -a "$LOG_FILE") 2>&1
+
 }
 
 main $@
