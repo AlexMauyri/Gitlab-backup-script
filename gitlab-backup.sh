@@ -189,6 +189,19 @@ read_repos_from_file(){
   log_info "Текущие репозитории: ${RAW_URLS[@]}"
 }
 
+filter_duplicate_urls(){
+  declare -A seen
+  REPO_URLS=()
+  for url in "${RAW_URLS[@]}"; do
+    if [[ -z "${seen[$url]+x}" ]]; then
+      seen["$url"]=1
+      REPO_URLS+=("$url")
+    fi
+  done
+
+  log_info "Получены уникальные репозитории: ${REPO_URLS[@]}"
+}
+
 main(){
   parse_args $@
 
@@ -201,6 +214,15 @@ main(){
   
   read_repos_from_var
   read_repos_from_file
+
+  filter_duplicate_urls
+
+  if [[ "$ARG_TEST" == true ]]; then
+    log_info "Список уникальных репозиториев: "
+    for url in "${REPO_URLS[@]}"; do
+      echo " $url"
+    done
+  fi
 }
 
 main $@
