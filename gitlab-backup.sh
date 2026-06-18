@@ -168,7 +168,25 @@ read_repos_from_var(){
     fi
   done
 
-  log_info "Успешно получены репозитории: ${RAW_URLS[@]}"
+  log_info "Текущие репозитории: ${RAW_URLS[@]}"
+}
+
+read_repos_from_file(){
+  if [[ -z "$REPO_FILE" ]]; then
+    return 0
+  fi
+  
+  log_info "Чтение репозиториев из файла: ${REPO_FILE}"
+
+  while IFS= read -r url || [[ -n "$url" ]]; do
+    url="${url%%#*}"
+    url="${url// /}"
+    if [[ -n "$url" ]]; then
+      RAW_URLS+=("$url")
+    fi
+  done < "$REPO_FILE"
+
+  log_info "Текущие репозитории: ${RAW_URLS[@]}"
 }
 
 main(){
@@ -182,6 +200,7 @@ main(){
   exec > >(tee -a "$LOG_FILE") 2>&1
   
   read_repos_from_var
+  read_repos_from_file
 }
 
 main $@
