@@ -298,12 +298,18 @@ worker(){
   local all_succeed=true
   log_info "$prefix обрабатывает следующие репозитории: $(cat "$list_file")"
   while IFS= read -r url; do
-    if ! clone_project "$url" "$wid"; then
+    if clone_project "$url" "$wid"; then
+      (
+        flock -x 200
+        echo "ok" >> "$STATS_DIR/ok"
+      ) 200>"${STATS_DIR}/counter.lock"
+    else
       log_error "$prefix не удалось обработать следующий репозиторий: $url"
       (
         flock -x 200
         echo "$url" >> "$FAILED_LIST"
-      ) 200>"${TEMP_DIR}/failed.lock"
+        echo "fail" >> "$STATS_DIR/fail"
+      ) 200>"${STATS_DIR}/counter.lock"
       all_succeed=false
     fi
   done < "$list_file"
@@ -318,8 +324,50 @@ worker(){
   fi
 }
 
+send_telegram() {
+    local message="$1"
+    [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" ]] && return 0
+    curl -s -X POST \
+        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+        -d "chat_id=${TELEGRAM_CHAT_ID}" \
+        --data-urlencode "text=$message" \
+        -d "parse_mode=Markdown" > /dev/null
+}
+
+send_summary() {
+    local ok="$1" fail="$2" duration="$3"
+    local icon="✅" status="Успешно"
+    if [[ $fail -gt 0 ]]; then
+      icon="⚠️"
+      status="С ошибками"
+    fi
+    send_telegram "*GitLab Backup* ${icon}
+Статус: ${status}
+✅ Успешно: ${ok}
+❌ Ошибки: ${fail}
+⏱ Время: ${duration}"
+}
+
 main(){
   parse_args $@
+
+  local start_time=$(date +%s)
+
+  cleanup() {
+    local exit_code=$?
+    log_warn "Очистка временных файлов..."
+    rm -rf "$TEMP_DIR" 2>/dev/null || true
+    rm -rf "$STATS_DIR" 2>/dev/null || true
+    if [[ $exit_code -ne 0 ]]; then
+      send_telegram "⚠️ *GitLab Backup прерван* (код $exit_code)"
+    fi
+  }
+  trap cleanup EXIT
+  trap 'log_warn "Прервано (INT)"; exit 130' INT
+  trap 'log_warn "Завершено (TERM)"; exit 143' TERM
+  TEMP_DIR=$(mktemp -d)
+  STATS_DIR=$(mktemp -d)
+  export STATS_DIR
 
   config_path=$(find_config)
   load_config "$config_path"
@@ -353,9 +401,6 @@ main(){
     test_mode
   fi
 
-  TEMP_DIR=$(mktemp -d)
-  trap 'rm -rf "$TEMP_DIR"' EXIT
-
   split_into_chunks
 
   FAILED_LIST="$TEMP_DIR/failed_urls.list"
@@ -384,6 +429,12 @@ main(){
     mapfile -t FAILED_URLS < "$FAILED_LIST"
   fi
 
+  local ok_count=$(wc -l < "$STATS_DIR/ok" 2>/dev/null || echo 0)
+  local fail_count=$(wc -l < "$STATS_DIR/fail" 2>/dev/null || echo 0)
+  local duration=$(($(date +%s) - start_time))
+  log_info "Бэкап завершён: успешно $ok_count, ошибок $fail_count, время ${duration}с"
+  send_summary "$ok_count" "$fail_count" "${duration}с"
+  
   if [[ $failed -eq 0 ]]; then
     log_info "Все workers закончили успешно"
   else
