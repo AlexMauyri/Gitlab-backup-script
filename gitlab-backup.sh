@@ -3,7 +3,6 @@
 set -euo pipefail
 
 #CONFIG VARIABLES
-GITLAB_USER=""
 GITLAB_TOKEN=""
 BACKUP_DIR=""
 TEMP_DIR="/tmp/gitlab_backup_workers"
@@ -21,11 +20,11 @@ ARG_TEST=false
 
 FAILED_URLS=()
 
-log_info() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] $*"; }
-log_warn() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [WARN] $*"; }
+log_info()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] $*"; }
+log_warn()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [WARN] $*"; }
 log_error() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $*" >&2; }
 
-help(){
+help() {
   cat << EOF
 GitLab Backup Script
 ==========================
@@ -45,9 +44,6 @@ GitLab Backup Script
 # Все пути должны быть абсолютными.
 # Для REPOS URL разделяются символом '|' (вертикальная черта).
 # Для REPO_FILE укажите путь к файлу с одним URL на строку.
-
-# Обязательно: имя пользователя GitLab (для логирования, не для аутентификации)
-GITLAB_USER=your_username
 
 # Обязательно: Personal Access Token (права read_repository)
 GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
@@ -76,18 +72,18 @@ BACKUP_DIR=/backup/gitlab
 EOF
 }
 
-parse_args(){
+parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --config) ARG_CONFIG="$2";  shift 2 ;;
-      --test)   ARG_TEST=true;    shift ;;
+      --config) ARG_CONFIG="$2"; shift 2 ;;
+      --test)   ARG_TEST=true;   shift ;;
       --help)   help;            exit 0 ;;
       *) echo "Неизвестный флаг: $1"; help; exit 1 ;;
     esac
   done
 }
 
-find_config(){
+find_config() {
   local paths=(
     "$ARG_CONFIG"
     "$HOME/.config/gitlab-backup.conf"
@@ -110,7 +106,7 @@ find_config(){
   exit 1
 }
 
-load_config(){
+load_config() {
   if ! source "$1"; then
     log_error "Ошибка при загрузке конфигурационного файла: $1"
     exit 1
@@ -119,8 +115,8 @@ load_config(){
   log_info "Конфигурация загружена из: $1"
 }
 
-validate_config(){
-  for var in GITLAB_USER GITLAB_TOKEN BACKUP_DIR; do
+validate_config() {
+  for var in GITLAB_TOKEN BACKUP_DIR; do
     if [[ -z "${!var}" ]]; then
       log_error "Пропущен необходимый параметр: $var"
       exit 1
@@ -128,7 +124,7 @@ validate_config(){
   done
 
   if [[ -z "$REPOS" && -z "$REPO_FILE" ]]; then
-    log_error "Не указаны репозитории. Укажите REPOS или REPO_FILE в конфигурационном файле." 
+    log_error "Не указаны репозитории. Укажите REPOS или REPO_FILE в конфигурационном файле."
     exit 1
   fi
 
@@ -156,7 +152,7 @@ validate_config(){
   log_info "Конфигурация проверена успешно"
 }
 
-read_repos_from_var(){
+read_repos_from_var() {
   if [[ -z "$REPOS" ]]; then
     return 0
   fi
@@ -174,11 +170,11 @@ read_repos_from_var(){
   log_info "Текущие репозитории: ${RAW_URLS[@]}"
 }
 
-read_repos_from_file(){
+read_repos_from_file() {
   if [[ -z "$REPO_FILE" ]]; then
     return 0
   fi
-  
+
   log_info "Чтение репозиториев из файла: ${REPO_FILE}"
 
   while IFS= read -r url || [[ -n "$url" ]]; do
@@ -192,7 +188,7 @@ read_repos_from_file(){
   log_info "Текущие репозитории: ${RAW_URLS[@]}"
 }
 
-filter_duplicate_urls(){
+filter_duplicate_urls() {
   declare -A seen
   REPO_URLS=()
   for url in "${RAW_URLS[@]}"; do
@@ -205,20 +201,20 @@ filter_duplicate_urls(){
   log_info "Получены уникальные репозитории: ${REPO_URLS[@]}"
 }
 
-transform_url(){
+transform_url() {
   local url="$1"
   local auth_url="${url/https:\/\//https://oauth2:${GITLAB_TOKEN}@}"
   echo "$auth_url"
 }
 
-get_project_name(){
+get_project_name() {
   local url="$1"
   local name="${url##*/}"
   name="${name%.git}"
   echo "$name"
 }
 
-test_mode(){
+test_mode() {
   echo "Проверка доступности репозиториев"
   echo "================================="
   local ok=0 fail=0
@@ -273,30 +269,33 @@ clone_project() {
   log_info "$prefix Выполнено: $project_name"
 }
 
-split_into_chunks(){
+split_into_chunks() {
   local total=${#REPO_URLS[@]}
   log_info "Количество репозиториев на обработку: $total"
   local chunk_size=$(( (total + PARALLEL_JOBS - 1) / PARALLEL_JOBS ))
   log_info "Размер чанка для workers: $chunk_size"
-  local w start
+
+  local w start chunk
   for (( w=0; w<PARALLEL_JOBS; w++ )); do
     start=$(( w * chunk_size ))
-    local chunk=("${REPO_URLS[@]:$start:$chunk_size}")
+    chunk=("${REPO_URLS[@]:$start:$chunk_size}")
     if [[ ${#chunk[@]} -eq 0 ]]; then
       continue
     fi
     printf '%s\n' "${chunk[@]}" > "${TEMP_DIR}/worker-${w}.list"
   done
 
-  log_info "Все файлы workers: $(ls $TEMP_DIR)"
+  log_info "Все файлы workers: $(ls "$TEMP_DIR")"
 }
 
-worker(){
+worker() {
   local wid="$1"
   local list_file="$2"
   local prefix="[worker-$wid]"
   local all_succeed=true
+
   log_info "$prefix обрабатывает следующие репозитории: $(cat "$list_file")"
+
   while IFS= read -r url; do
     if clone_project "$url" "$wid"; then
       (
@@ -313,43 +312,44 @@ worker(){
       all_succeed=false
     fi
   done < "$list_file"
+
   log_info "$prefix завершил свою работу"
 
   if [[ $all_succeed == false ]]; then
-      log_error "$prefix завершил с ошибками"
-      return 1
+    log_error "$prefix завершил с ошибками"
+    return 1
   else
-      log_info "$prefix завершил успешно"
-      return 0
+    log_info "$prefix завершил успешно"
+    return 0
   fi
 }
 
 send_telegram() {
-    local message="$1"
-    [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" ]] && return 0
-    curl -s -X POST \
-        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-        -d "chat_id=${TELEGRAM_CHAT_ID}" \
-        --data-urlencode "text=$message" \
-        -d "parse_mode=Markdown" > /dev/null
+  local message="$1"
+  [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" ]] && return 0
+  curl -s -X POST \
+    "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+    -d "chat_id=${TELEGRAM_CHAT_ID}" \
+    --data-urlencode "text=$message" \
+    -d "parse_mode=Markdown" > /dev/null
 }
 
 send_summary() {
-    local ok="$1" fail="$2" duration="$3"
-    local icon="✅" status="Успешно"
-    if [[ $fail -gt 0 ]]; then
-      icon="⚠️"
-      status="С ошибками"
-    fi
-    send_telegram "*GitLab Backup* ${icon}
+  local ok="$1" fail="$2" duration="$3"
+  local icon="✅" status="Успешно"
+  if [[ $fail -gt 0 ]]; then
+    icon="⚠️"
+    status="С ошибками"
+  fi
+  send_telegram "*GitLab Backup* ${icon}
 Статус: ${status}
 ✅ Успешно: ${ok}
 ❌ Ошибки: ${fail}
 ⏱ Время: ${duration}"
 }
 
-main(){
-  parse_args $@
+main() {
+  parse_args "$@"
 
   local start_time=$(date +%s)
 
@@ -365,6 +365,7 @@ main(){
   trap cleanup EXIT
   trap 'log_warn "Прервано (INT)"; exit 130' INT
   trap 'log_warn "Завершено (TERM)"; exit 143' TERM
+
   TEMP_DIR=$(mktemp -d)
   STATS_DIR=$(mktemp -d)
   export STATS_DIR
@@ -375,7 +376,7 @@ main(){
 
   mkdir -p "$(dirname "$LOG_FILE")"
   exec > >(tee -a "$LOG_FILE") 2>&1
-  
+
   read_repos_from_var
   read_repos_from_file
 
@@ -434,7 +435,7 @@ main(){
   local duration=$(($(date +%s) - start_time))
   log_info "Бэкап завершён: успешно $ok_count, ошибок $fail_count, время ${duration}с"
   send_summary "$ok_count" "$fail_count" "${duration}с"
-  
+
   if [[ $failed -eq 0 ]]; then
     log_info "Все workers закончили успешно"
   else
@@ -453,4 +454,4 @@ main(){
   fi
 }
 
-main $@
+main "$@"
