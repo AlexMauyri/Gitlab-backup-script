@@ -6,17 +6,20 @@ set -euo pipefail
 GITLAB_USER=""
 GITLAB_TOKEN=""
 BACKUP_DIR=""
+TEMP_DIR="/tmp/gitlab_backup_workers"
 REPOS=""
 REPO_FILE=""
 PARALLEL_JOBS=4
 RETRY_COUNT=3
 LOG_FILE="./logs/gitlab-backup.log"
 TELEGRAM_BOT_TOKEN=""
-TELEGRAN_CHAT_ID=""
+TELEGRAM_CHAT_ID=""
 
 #ARG VARIABLES
 ARG_CONFIG=""
 ARG_TEST=false
+
+FAILED_URLS=()
 
 log_info() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] $*"; }
 log_warn() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [WARN] $*"; }
@@ -247,21 +250,72 @@ retry() {
 
 clone_project() {
   local url="$1"
+  local wid="${2:-0}"
+  local prefix="[worker-$wid]"
   local project_name=$(get_project_name "$url")
   local date_dir=$(date "+%d-%m-%Y")
   local target_dir="$BACKUP_DIR/$project_name/$date_dir/$project_name"
 
   if [[ -d "$target_dir" ]]; then
-    log_info "Обновление существующего зеркала: $project_name"
-    retry git -C "$target_dir" remote update --prune
-    log_info "Обновлено: $project_name"
+    log_info "$prefix Обновление существующего зеркала: $project_name"
+    if ! retry git -C "$target_dir" remote update --prune; then
+      return 1
+    fi
+    log_info "$prefix Обновлено: $project_name"
     return 0
   fi
 
   mkdir -p "$(dirname "$target_dir")"
-  log_info "Клонирование $project_name -> $target_dir"
-  retry git clone --mirror "$url" "$target_dir"
-  log_info "Выполнено: $project_name"
+  log_info "$prefix Клонирование $project_name -> $target_dir"
+  if ! retry git clone --mirror "$url" "$target_dir"; then
+    return 1
+  fi
+  log_info "$prefix Выполнено: $project_name"
+}
+
+split_into_chunks(){
+  local total=${#REPO_URLS[@]}
+  log_info "Количество репозиториев на обработку: $total"
+  local chunk_size=$(( (total + PARALLEL_JOBS - 1) / PARALLEL_JOBS ))
+  log_info "Размер чанка для workers: $chunk_size"
+  local w start
+  for (( w=0; w<PARALLEL_JOBS; w++ )); do
+    start=$(( w * chunk_size ))
+    local chunk=("${REPO_URLS[@]:$start:$chunk_size}")
+    if [[ ${#chunk[@]} -eq 0 ]]; then
+      continue
+    fi
+    printf '%s\n' "${chunk[@]}" > "${TEMP_DIR}/worker-${w}.list"
+  done
+
+  log_info "Все файлы workers: $(ls $TEMP_DIR)"
+}
+
+worker(){
+  local wid="$1"
+  local list_file="$2"
+  local prefix="[worker-$wid]"
+  local all_succeed=true
+  log_info "$prefix обрабатывает следующие репозитории: $(cat "$list_file")"
+  while IFS= read -r url; do
+    if ! clone_project "$url" "$wid"; then
+      log_error "$prefix не удалось обработать следующий репозиторий: $url"
+      (
+        flock -x 200
+        echo "$url" >> "$FAILED_LIST"
+      ) 200>"${TEMP_DIR}/failed.lock"
+      all_succeed=false
+    fi
+  done < "$list_file"
+  log_info "$prefix завершил свою работу"
+
+  if [[ $all_succeed == false ]]; then
+      log_error "$prefix завершил с ошибками"
+      return 1
+  else
+      log_info "$prefix завершил успешно"
+      return 0
+  fi
 }
 
 main(){
@@ -299,9 +353,53 @@ main(){
     test_mode
   fi
 
-  for (( i=0; i<${#REPO_URLS[@]}; i++ )); do
-    clone_project "${REPO_URLS[i]}"
+  TEMP_DIR=$(mktemp -d)
+  trap 'rm -rf "$TEMP_DIR"' EXIT
+
+  split_into_chunks
+
+  FAILED_LIST="$TEMP_DIR/failed_urls.list"
+
+  declare -a WORKER_PIDS=()
+  for list_file in "${TEMP_DIR}"/worker-*.list; do
+    if ! [[ -r "$list_file" ]]; then
+      continue
+    fi
+    local wid="${list_file##*-}"
+    wid="${wid%.list}"
+    worker "$wid" "$list_file" &
+    WORKER_PIDS+=($!)
   done
+
+  set +e
+  local failed=0
+  for pid in "${WORKER_PIDS[@]}"; do
+    if ! wait "$pid"; then
+      ((failed++))
+    fi
+  done
+  set -e
+
+  if [[ -f "$FAILED_LIST" && -s "$FAILED_LIST" ]]; then
+    mapfile -t FAILED_URLS < "$FAILED_LIST"
+  fi
+
+  if [[ $failed -eq 0 ]]; then
+    log_info "Все workers закончили успешно"
+  else
+    log_warn "$failed worker(s) закончили с ошибкой"
+  fi
+
+  if [[ ${#FAILED_URLS[@]} -gt 0 ]]; then
+    log_error "Не удалось клонировать следующие репозитории:"
+    for url in "${FAILED_URLS[@]}"; do
+      log_error "$url; "
+    done
+    exit 1
+  else
+    log_info "Бэкап успешно закончен"
+    exit 0
+  fi
 }
 
 main $@
